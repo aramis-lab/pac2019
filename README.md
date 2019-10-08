@@ -41,7 +41,7 @@ The `results_main`, `results_additional` and `statistics and visualization` fold
 All the scripts that have been used during the challenge can be found in the `scripts` folder.
 The folder that possibly is of most interest if the results are to be reproduced is the `src` folder. The complete source code used for this challenge can be found in this folder.
 
-Please note that this repository uses 2 a mix programing languages: **R** and **Python**.
+Please note that this repository uses a mix of 2 programing languages: **R** and **Python**.
 
 
 # Requirements
