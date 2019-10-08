@@ -9,6 +9,16 @@ Our results may be used to guide researchers to build age predictors on healthy 
 Keywords: Brain age, aging, MRI, machine learning, deep learning, statistical learning
 
 
+# Contributors
+A **huge** thank you to all the contributors to this challenge:
+- [Baptiste Couvy-Duchesne](https://github.com/baptisteCD)
+- [Johann Faouzi](https://github.com/johannfaouzi)
+- [Benoit Martin](https://github.com/benoitmartin88)
+- [Elina Thibeau-Sutre](https://github.com/14thibea)
+- [Adam Wild](https://github.com/adamwild)
+- [Manon Ansart](https://github.com/manonansart)
+
+
 # Repository structure
 This repository is structures as follows:
 
