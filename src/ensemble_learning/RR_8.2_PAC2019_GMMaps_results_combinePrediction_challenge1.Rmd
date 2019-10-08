@@ -1,0 +1,141 @@
+---
+title: "PAC2019 combine models"
+author: "by [Baptiste Couvy-Duchesne] - `r format(Sys.time(), '%d %B %Y')`"
+output:
+  epuRate::PCTG:
+    toc: TRUE
+    code_folding: "show"
+---
+
+```{r, echo=FALSE, message=FALSE, warning=FALSE}
+# You need these libraries to run this template:
+library(rmarkdown)    # install.packages("rmarkdown") 
+library(epuRate)      # devtools::install_github("holtzy/epuRate", force=TRUE)
+```
+
+# Table of pvalues for MAE differences - GM vs FreeSurfer
+
+```{R, message=FALSE, eval=FALSE}
+
+for (iter in 0:4){
+
+  # Open and merge scores  
+dat=read.table(paste0("../../results_main/Dat_iter_", iter, "_enhanced.tsv"), header=T)  
+
+lmmmean=read.table(paste0("../../results_additional/LMM_mean/split-", iter, ".tsv"), header=T)  
+colnames(lmmmean)[3]="lmmmeanage_GM"
+dat=merge(dat, lmmmean[,c("subject_ID", "lmmmeanage_GM")], by="subject_ID", all=T)
+
+lmmquant=read.table(paste0("../../results_additional/LMM_quantiles/split-", iter, ".tsv"), header=T)  
+colnames(lmmquant)[3]="lmmquantage_GM"
+dat=merge(dat, lmmquant[,c("subject_ID", "lmmquantage_GM")], by="subject_ID", all=T)
+
+svm=read.table(paste0("../../results_additional/SVM(rbf)/split-", iter, ".tsv"), header=T)  
+colnames(svm)=c("rnb", "subject_ID", "age", "svmage_GM")
+dat=merge(dat, svm[,c("subject_ID", "svmage_GM")], by="subject_ID", all=T)
+
+# Calculate age difference
+dat$agedif_lmmmean_GM=dat$lmmmeanage_GM-dat$age
+dat$agedif_lmmquant_GM=dat$lmmquantage_GM-dat$age
+dat$agedif_svm_GM=dat$svmage_GM-dat$age
+
+# Test improvement of scores
+print("")
+print(iter)
+
+# print(VS previous scores)
+#print(t.test(abs(dat$agedif_lmmmean_GM), abs(dat$agedif_lmmmean), paired = T))
+#print(t.test(abs(dat$agedif_lmmquant_GM), abs(dat$agedif_lmmquant), paired = T))
+#print(t.test(abs(dat$agedif_svm_GM), abs(dat$agedif_svm), paired = T))
+
+# Test against ggnet
+# print(VS GGNET)
+print(t.test(abs(dat$agedif_lmmmean_GM), abs(dat$agedif_ggnet), paired = T))
+print(t.test(abs(dat$agedif_lmmquant_GM), abs(dat$agedif_ggnet), paired = T))
+print(t.test(abs(dat$agedif_svm_GM), abs(dat$agedif_ggnet), paired = T))
+
+
+write.table(dat, paste0("../../results_main/Dat_iter_", iter, "_enhanced_wscoresGM.tsv") )
+   
+}
+
+0.05/15
+
+```
+
+# Combine previous algorithms with GM based ones
+
+```{R, message=FALSE, eval=FALSE}
+
+# FUNCTION
+linearCombinationOfPredictors50_50split=function(iter, scoreList){
+
+mae=se_mae=sr=rr=rrank=coefsMean=meandif=pval=meandif=maeRF=srRF=meandifRF=meandifRFLM=NULL
+dat=read.table(paste0("../../results_main/Dat_iter_", iter, "_enhanced_wscoresGM.tsv"), header=T, stringsAsFactors = F)
+
+# extract ~N=530 test set
+dataa=dat[which(!is.na(dat$meancombinedage)),]
+if( length(which(colSums(!is.na(dataa))==0))>0){
+dataa=dataa[,-which(colSums(!is.na(dataa))==0)]
+}
+
+# Bootstrap repeats
+for (nCV in 1:500){
+  coefs=NULL
+
+# Get nested training and test sample
+  nestedTrain=sample(dataa$subject_ID, size = floor(length(dataa$subject_ID)*0.5), replace = F )
+
+  train=dataa[which(dataa$subject_ID %in% nestedTrain),]
+  predages=colnames(dataa)[which(colnames(dataa) %in% scoreList )]
+  m1=lm(as.formula(paste("age ~ 0 + ", paste(predages , collapse="+"))), data=train, na.action = "na.omit")
+  
+  test=dataa[-which(dataa$subject_ID %in% nestedTrain),]
+  test$combinedage=predict(m1, newdata = test)
+  coefs=rbind(coefs, summary(m1)$coeff[,1])
+  test[,paste0("agedif_combinedage")]=test$age-test[,"combinedage"]  
+ 
+  # prediction from random forrest on same splits
+  m2=randomForest(as.formula(paste("age ~ 0 + ", paste(predages , collapse="+"))), ntree=100, maxnodes=15, data = train, importance = TRUE, na.action = "na.exclude")
+  test$combinedageRF=predict(m2, newdata = test)
+  test[,paste0("agedif_combinedageRF")]=test$age-test[,"combinedageRF"]  
+ colSums(is.na(test))
+  # Extract statistics
+  mae=c(mae, mean(abs(test[,paste0("agedif_combinedage")]), na.rm = T))
+  se_mae=sd(abs(test[,paste0("agedif_combinedage")]), na.rm = T)/sqrt(length(test$agedif_combinedage))
+  sr=c(sr, cor(test$age,test[,paste0("agedif_combinedage")], use="p", method = "s"))
+  rr=c(rr, cor(test$age,test[,"combinedage"] , use="p", method = "p"))
+  rrank=c(rrank, cor(test$age,test[,"combinedage"] , use="p", method = "s"))
+ 
+  # Difference between LM and original ggnet
+  meandif=c(meandif, t.test(abs(test$agedif_ggnet), abs(test$agedif_combinedage), paired = T)$estimate)
+  coefsMean=rbind(coefsMean,colMeans(coefs))
+
+  # RF statistics 
+  maeRF=c(maeRF, mean(abs(test[,paste0("agedif_combinedageRF")]), na.rm = T))
+  srRF=c(srRF, cor(test$age,test[,paste0("agedif_combinedageRF")], use="p", method = "s"))
+  meandifRF=c(meandifRF, t.test(abs(test$agedif_ggnet), abs(test$agedif_combinedageRF), paired = T)$estimate)
+  
+  # RF vs LM
+  meandifRFLM=c(meandifRFLM, t.test(abs(test$agedif_combinedageRF), abs(test$agedif_combinedage), paired = T)$estimate)
+  
+}
+return(cbind(mae,se_mae, sr, rr, rrank, coefsMean, pval,meandif, maeRF, srRF, meandifRF, meandifRFLM ))
+}
+
+
+
+# with GM scores
+for (iter in 0:4){
+allmodels=linearCombinationOfPredictors50_50split( iter = iter, scoreList = c("ggnetage","resnetage",  "bbnetage", "obbnetage", "lmmmeanage_GM", "lmmquantage_GM", "svmage_GM") )
+allmodels=as.data.frame(allmodels)
+
+# Stats
+print(iter)
+print(mean(allmodels$mae))
+print(sqrt(mean((allmodels$mae-mean(allmodels$mae))**2)))
+}
+
+mean(c(3.39, 3.46,3.36,3.55,3.35))
+```
+

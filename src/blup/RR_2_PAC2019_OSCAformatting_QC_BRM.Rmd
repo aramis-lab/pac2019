@@ -1,0 +1,56 @@
+---
+title: "PAC2019 QC of BRM"
+author: "by [Baptiste Couvy-Duchesne] - `r format(Sys.time(), '%d %B %Y')`"
+output:
+  epuRate::PCTG:
+    toc: TRUE
+    code_folding: "show"
+---
+
+```{r, echo=FALSE, message=FALSE, warning=FALSE}
+# You need these libraries to run this template:
+library(rmarkdown)    # install.packages("rmarkdown") 
+library(epuRate)      # devtools::install_github("holtzy/epuRate", force=TRUE)
+```
+
+<br><br><br><br>
+
+## QC BRM
+
+```{R, message=FALSE, eval=FALSE}
+
+source("RR_2.0_BRM_QC_functions.R")
+
+# Get variance of diagonal and off-diagonal elements
+vals=NULL
+IDs2ExDiag=NULL
+  for (fwhmfsav in c("fwhm0.fsaverage")){
+  brm=asBRM(ReadORMBin(paste0( "AllVertices.", fwhmfsav, ".PAC2019")))
+  vals=rbind(vals, c(mean(diag(brm)),var(diag(brm)), mean(brm[upper.tri(brm)]),var(brm[upper.tri(brm)]) , sqrt(var(brm[upper.tri(brm)]))*4 , min(brm[upper.tri(brm)]), max(brm[upper.tri(brm)]) ) )
+  print(fwhmfsav)
+  png(paste0("HistogramBRM_", fwhmfsav, ".png"), width = 20, height = 10, units = "cm", res = 400)
+  par(mfrow=c(1,2))
+  hist(diag(brm), main = paste0( fwhmfsav, " BRM diagonal"), breaks=500 )
+  hist(brm[upper.tri(brm)], main = paste0(fwhmfsav, " BRM diagonal"), breaks=5000 )
+  dev.off()
+
+}
+rownames(vals)=c("fwhm0.fsaverage")
+colnames(vals)=c("Mean - diag", "Var - diag", "Mean - off diag", "Var - off diag", "BRM cutoff", "min off-diag", "max off-diag")
+print(vals)
+dim(brm)
+write.table(vals, "Summary_QC.txt", col.names=T, row.names=T)
+
+```
+
+## Prune BRM
+
+```{bash, message=FALSE, eval=FALSE}
+
+wd="working/directory"
+cd $wd
+${wd}/bin/osca_05032019 --reml --orm ${wd}/results/linear/LMManalysis/BODFiles/AllVertices.fwhm0.fsaverage.PAC2019 --orm-cutoff 0.20 --orm-cutoff-2sides --make-orm --out ${wd}/results/linear/LMManalysis/BODFiles/AllVertices.fwhm0.fsaverage.PAC2019.QC
+#After pruning the ORM, there are 2308 individuals (232 individuals removed).
+
+```
+

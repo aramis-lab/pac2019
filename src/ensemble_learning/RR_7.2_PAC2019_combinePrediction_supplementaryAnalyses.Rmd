@@ -1,0 +1,242 @@
+---
+title: "PAC2019 combine models"
+author: "by [Baptiste Couvy-Duchesne] - `r format(Sys.time(), '%d %B %Y')`"
+output:
+  epuRate::PCTG:
+    toc: TRUE
+    code_folding: "show"
+---
+
+```{r, echo=FALSE, message=FALSE, warning=FALSE}
+# You need these libraries to run this template:
+library(rmarkdown)    # install.packages("rmarkdown") 
+library(epuRate)      # devtools::install_github("holtzy/epuRate", force=TRUE)
+```
+
+# Table of pvalues for MAE differences
+
+```{R, message=FALSE, eval=FALSE}
+
+iter1=read.table("../../results_main/Dat_iter_0.tsv", header=T)
+
+mean(abs(iter1$agedif_lmmmean), na.rm = T)
+sd(abs(iter1$agedif_lmmmean), na.rm = T)
+length(which(!is.na(iter1$agedif_lmmmean)))
+sd(abs(iter1$agedif_lmmmean), na.rm = T)/sqrt(533)
+
+# test MAE mean difference
+t.test(abs(iter1$agedif_bbnet), abs(iter1$agedif_lmmquant), paired = T)
+
+t.test(abs(iter1$agedif_ggnet), abs(iter1$agedif_bbnet), paired = T)
+t.test(abs(iter1$agedif_ggnet), abs(iter1$agedif_obbnet), paired = T)
+t.test(abs(iter1$agedif_ggnet), abs(iter1$agedif_resnet), paired = T)
+t.test(abs(iter1$agedif_ggnet), abs(iter1$agedif_svm), paired = T)
+t.test(abs(iter1$agedif_ggnet), abs(iter1$agedif_lmmmean), paired = T)
+t.test(abs(iter1$agedif_ggnet), abs(iter1$agedif_lmmquant), paired = T)
+
+```
+
+# Loop on all iters and get pvalues
+
+```{R, message=FALSE, eval=FALSE}
+
+# Pvalues between BLUP
+for (iter in 0:4){
+ pvl1=NULL 
+dat=read.table(paste0("../../results_main/Dat_iter_", iter, ".tsv"), header=T)
+
+# pval differences DL. vs. BLUP/SVM
+pvl1=c( t.test(abs(dat$agedif_bbnet), abs(dat$agedif_lmmquant), paired = T)$p.value, 
+        t.test(abs(dat$agedif_resnet), abs(dat$agedif_lmmquant), paired = T)$p.value,
+        t.test(abs(dat$agedif_obbnet), abs(dat$agedif_lmmquant), paired = T)$p.value,
+        t.test(abs(dat$agedif_ggnet), abs(dat$agedif_lmmquant), paired = T)$p.value)
+print(iter)
+print(pvl1)
+print(max(pvl1))
+
+}
+
+# Pvalues between DL
+for (iter in 0:4){
+ pvl1=NULL 
+dat=read.table(paste0("../../results_main/Dat_iter_", iter, ".tsv"), header=T)
+
+# pval differences DL
+pvl1=c( t.test(abs(dat$agedif_bbnet), abs(dat$agedif_resnet), paired = T)$p.value, 
+        t.test(abs(dat$agedif_bbnet), abs(dat$agedif_ggnet), paired = T)$p.value,
+        wilcox.test(abs(dat$agedif_bbnet), abs(dat$agedif_obbnet))$p.value,
+        t.test(abs(dat$agedif_resnet), abs(dat$agedif_ggnet), paired = T)$p.value,
+        t.test(abs(dat$agedif_resnet), abs(dat$agedif_obbnet), paired = T)$p.value,
+        t.test(abs(dat$agedif_ggnet), abs(dat$agedif_obbnet), paired = T)$p.value)
+print(iter)
+print(pvl1)
+print(min(pvl1))
+
+}
+
+
+```
+
+
+# Compare ensemble learning (RF, LM, mean and median)
+
+```{R, message=FALSE, eval=FALSE}
+
+
+linearCombinationOfPredictors50_50split_RF_LM=function(iter, scoreList){
+
+mae=se_mae=sr=rr=rrank=coefsMean=meandif=pval=meandif=maeRF=srRF=meandifRF=meandifRFLM=NULL
+dat=read.table(paste0("../../results_main/Dat_iter_", iter, "_enhanced.tsv"), header=T, stringsAsFactors = F)
+
+# extract ~N=530 test set
+dataa=dat[which(!is.na(dat$meancombinedage)),]
+if( length(which(colSums(!is.na(dataa))==0))>0){
+dataa=dataa[,-which(colSums(!is.na(dataa))==0)]
+}
+
+# Bootstrap repeats
+for (nCV in 1:500){
+  coefs=NULL
+
+# Get nested training and test sample
+  nestedTrain=sample(dataa$subject_ID, size = floor(length(dataa$subject_ID)*0.5), replace = F )
+
+  train=dataa[which(dataa$subject_ID %in% nestedTrain),]
+  predages=colnames(dataa)[which(colnames(dataa) %in% scoreList )]
+  m1=lm(as.formula(paste("age ~ 0 + ", paste(predages , collapse="+"))), data=train, na.action = "na.omit")
+  
+  test=dataa[-which(dataa$subject_ID %in% nestedTrain),]
+  test$combinedage=predict(m1, newdata = test)
+  coefs=rbind(coefs, summary(m1)$coeff[,1])
+  test[,paste0("agedif_combinedage")]=test$age-test[,"combinedage"]  
+ 
+  # prediction from random forrest on same splits
+  m2=randomForest(as.formula(paste("age ~ 0 + ", paste(predages , collapse="+"))), ntree=100, maxnodes=15, data = train, importance = TRUE, na.action = "na.exclude")
+  test$combinedageRF=predict(m2, newdata = test)
+  test[,paste0("agedif_combinedageRF")]=test$age-test[,"combinedageRF"]  
+ colSums(is.na(test))
+  # Extract statistics
+  mae=c(mae, mean(abs(test[,paste0("agedif_combinedage")]), na.rm = T))
+  se_mae=sd(abs(test[,paste0("agedif_combinedage")]), na.rm = T)/sqrt(length(test$agedif_combinedage))
+  sr=c(sr, cor(test$age,test[,paste0("agedif_combinedage")], use="p", method = "s"))
+  rr=c(rr, cor(test$age,test[,"combinedage"] , use="p", method = "p"))
+  rrank=c(rrank, cor(test$age,test[,"combinedage"] , use="p", method = "s"))
+  pval=c(pval, t.test(abs(test$agedif_ggnet), abs(test$agedif_combinedage), paired = T)$p.value)
+  meandif=c(meandif, t.test(abs(test$agedif_ggnet), abs(test$agedif_combinedage), paired = T)$estimate)
+  coefsMean=rbind(coefsMean,colMeans(coefs))
+
+  
+  # RF statistics
+  maeRF=c(maeRF, mean(abs(test[,paste0("agedif_combinedageRF")]), na.rm = T))
+  srRF=c(srRF, cor(test$age,test[,paste0("agedif_combinedageRF")], use="p", method = "s"))
+  meandifRF=c(meandifRF, t.test(abs(test$agedif_ggnet), abs(test$agedif_combinedageRF), paired = T)$estimate)
+  
+  # RF vs LM
+  meandifRFLM=c(meandifRFLM, t.test(abs(test$agedif_combinedageRF), abs(test$agedif_combinedage), paired = T)$estimate)
+  
+  
+}
+return(cbind(mae,se_mae, sr, rr, rrank, coefsMean, pval,meandif, maeRF, srRF, meandifRF, meandifRFLM ))
+}
+
+
+# Run function and extract table statistics
+wgt50=linearCombinationOfPredictors50_50split_RF_LM(iter = 0, scoreList =c("ggnetage","resnetage",  "bbnetage", "obbnetage",  "svmage", "lmmmeanage", "lmmquantage") )
+wgt50=as.data.frame(wgt50)
+
+
+# Values of interest
+# LM
+mean(wgt50$mae)
+sqrt(mean((wgt50$mae-mean(wgt50$mae))**2))
+mean(wgt50$sr)
+
+# RF
+mean(wgt50$maeRF)
+sqrt(mean((wgt50$maeRF-mean(wgt50$maeRF))**2))
+mean(wgt50$srRF)
+
+# LM vs ggnet
+mean(wgt50$meandif)
+sqrt(mean((wgt50$meandif-mean(wgt50$meandif))**2))
+1-pt(q =mean(wgt50$meandif) / (sqrt(mean((wgt50$meandif-mean(wgt50$meandif))**2)) ) , df = 533/2  )
+# fold 1  - 0.37 (0.099) p=1.3e-4
+
+
+# RF vs ggnet
+mean(wgt50$meandifRF)
+sqrt(mean((wgt50$meandifRF-mean(wgt50$meandifRF))**2))
+1-pt(q =mean(wgt50$meandifRF) / (sqrt(mean((wgt50$meandifRF-mean(wgt50$meandifRF))**2)) ) , df = 533/2  )
+# fold 1  - 0.21 (0.14) p=0.069
+
+# RF vs. LM
+mean(wgt50$meandifRFLM)
+sqrt(mean((wgt50$meandifRFLM-mean(wgt50$meandifRFLM))**2))
+1-pt(q =mean(wgt50$meandifRFLM) / (sqrt(mean((wgt50$meandifRFLM-mean(wgt50$meandifRFLM))**2)) ) , df = 533/2  )
+# fold 1  - 0.16 (0.0970) p=0.051
+
+
+# Extract all pvalues for all folds 
+png(paste0("../../results_main/BoxPlots_weights_alliter.png"), width = 15, height = 40, units = "cm", res = 300)
+par(mar=c(3,3,1,1), mfrow=c(5,1))
+
+for (iter in 0:4){
+  
+wgt50=linearCombinationOfPredictors50_50split_RF_LM(iter = iter, scoreList =c("ggnetage","resnetage",  "bbnetage", "obbnetage",  "svmage", "lmmmeanage", "lmmquantage") )
+wgt50=as.data.frame(wgt50)
+
+print(iter)
+
+print("LM")
+print(mean(wgt50$mae))
+print(sqrt(mean((wgt50$mae-mean(wgt50$mae))**2)))
+print(mean(wgt50$sr))
+
+print("RF")
+print(mean(wgt50$maeRF))
+print(sqrt(mean((wgt50$maeRF-mean(wgt50$maeRF))**2)))
+print(mean(wgt50$srRF))
+
+print("LM vs ggnet")
+print(1-pt(q =mean(wgt50$meandif) / (sqrt(mean((wgt50$meandif-mean(wgt50$meandif))**2)) ) , df = 533/2  ))
+
+print("RF vs ggnet")
+print(1-pt(q =mean(wgt50$meandifRF) / (sqrt(mean((wgt50$meandifRF-mean(wgt50$meandifRF))**2)) ) , df = 533/2  ))
+
+print("RF vs. LM")
+print(1-pt(q =mean(wgt50$meandifRFLM) / (sqrt(mean((wgt50$meandifRFLM-mean(wgt50$meandifRFLM))**2)) ) , df = 533/2  ))
+
+boxplot(wgt50[,6:12], las=1, cex.axis=0.8, names = c("Inception V1","ResNet", "6 Layers CNN", "Age spe. 6-CNN",  "SVM", "BLUP mean", "BLUP quantiles"))
+grid()
+
+}
+dev.off()
+
+
+# Mae and SE from mean and median combined
+res=read.table(paste0("../../results_main/performances_AllAlgo_enhanced.txt"), header=T)
+
+res$mae_meancombined
+res$maeSE_meancombined
+res$sr_meancombined
+
+res$mae_mediancombined
+res$maeSE_mediancombined
+res$sr_mediancombined
+
+for (iter in 0:4){
+  dat=read.table(paste0("../../results_main/Dat_iter_", iter, "_enhanced.tsv"), header=T)
+  print(iter)
+  print(t.test(abs(dat$agedif_meancombined), abs(dat$agedif_ggnet)))
+  print(t.test(abs(dat$agedif_mediancombined), abs(dat$agedif_ggnet)))
+
+}
+mean(res$mae_meancombined)
+mean(res$mae_mediancombined)
+mean(c(3.46,3.53,3.33,3.57,3.34))
+mean(c(3.62, 3.60,3.46,3.72,3.51))
+
+sessionInfo()
+
+```
+

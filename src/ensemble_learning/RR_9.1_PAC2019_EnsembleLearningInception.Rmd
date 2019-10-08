@@ -1,0 +1,178 @@
+---
+title: "PAC2019 combine models"
+author: "by [Baptiste Couvy-Duchesne] - `r format(Sys.time(), '%d %B %Y')`"
+output:
+  epuRate::PCTG:
+    toc: TRUE
+    code_folding: "show"
+---
+
+```{r, echo=FALSE, message=FALSE, warning=FALSE}
+# You need these libraries to run this template:
+library(rmarkdown)    # install.packages("rmarkdown") 
+library(epuRate)      # devtools::install_github("holtzy/epuRate", force=TRUE)
+```
+
+# Create merged file
+
+```{R, message=FALSE, eval=FALSE}
+
+for (iter in 0){
+
+  # Open and merge scores  
+dat=read.table(paste0("../../results_main/Dat_iter_", iter, "_enhanced_wscoresGM.tsv"), header=T)  
+
+for (incepIter in 1:10){
+  
+  ggnet=read.table(paste0("../../results_additional/ggnet_10times/split-",iter, "_iter-", incepIter, ".tsv") , header=T)
+  colnames(ggnet)=c("subject_ID" , "age", paste0("ggnet_iter",incepIter))
+  dat=merge(dat, ggnet[,c("subject_ID", paste0("ggnet_iter",incepIter) )], by="subject_ID")
+  
+}
+
+for (incepIter in 1:10){
+  
+  ggnet=read.table(paste0("../../results_additional/ggnet_10times/split-",iter, "-epoch", incepIter, ".tsv") , header=T)
+  colnames(ggnet)=c("subject_ID" , "age", paste0("ggnet_epoch",incepIter))
+  dat=merge(dat, ggnet[,c("subject_ID", paste0("ggnet_epoch",incepIter) )], by="subject_ID")
+  
+}
+
+write.table(dat, paste0("../../results_main/Dat_iter_", iter, "_enhanced_wscoresGM_wggnetIter.tsv"))
+}
+
+```
+
+# Combine scores and evaluate performance
+
+```{R, message=FALSE, eval=FALSE}
+
+# FUNCTION
+linearCombinationOfPredictors50_50split=function(iter, scoreList){
+
+mae=se_mae=sr=rr=rrank=coefsMean=meandif=pval=meandif=maeRF=srRF=meandifRF=meandifRFLM=NULL
+dat=read.table(paste0("../results_main/Dat_iter_", iter, "_enhanced_wscoresGM_wggnetIter.tsv"), header=T, stringsAsFactors = F)
+
+# extract ~N=530 test set
+dataa=dat[which(!is.na(dat$meancombinedage)),]
+if( length(which(colSums(!is.na(dataa))==0))>0){
+dataa=dataa[,-which(colSums(!is.na(dataa))==0)]
+}
+
+# Bootstrap repeats
+for (nCV in 1:500){
+  coefs=NULL
+
+# Get nested training and test sample
+  nestedTrain=sample(dataa$subject_ID, size = floor(length(dataa$subject_ID)*0.5), replace = F )
+
+  train=dataa[which(dataa$subject_ID %in% nestedTrain),]
+  predages=colnames(dataa)[which(colnames(dataa) %in% scoreList )]
+  m1=lm(as.formula(paste("age ~ 0 + ", paste(predages , collapse="+"))), data=train, na.action = "na.omit")
+  
+  test=dataa[-which(dataa$subject_ID %in% nestedTrain),]
+  test$combinedage=predict(m1, newdata = test)
+  coefs=rbind(coefs, summary(m1)$coeff[,1])
+  test[,paste0("agedif_combinedage")]=test$age-test[,"combinedage"]  
+ 
+  # prediction from random forrest on same splits
+  m2=randomForest(as.formula(paste("age ~ 0 + ", paste(predages , collapse="+"))), ntree=100, maxnodes=15, data = train, importance = TRUE, na.action = "na.exclude")
+  test$combinedageRF=predict(m2, newdata = test)
+  test[,paste0("agedif_combinedageRF")]=test$age-test[,"combinedageRF"]  
+ colSums(is.na(test))
+  # Extract statistics
+  mae=c(mae, mean(abs(test[,paste0("agedif_combinedage")]), na.rm = T))
+  se_mae=sd(abs(test[,paste0("agedif_combinedage")]), na.rm = T)/sqrt(length(test$agedif_combinedage))
+  sr=c(sr, cor(test$age,test[,paste0("agedif_combinedage")], use="p", method = "s"))
+  rr=c(rr, cor(test$age,test[,"combinedage"] , use="p", method = "p"))
+  rrank=c(rrank, cor(test$age,test[,"combinedage"] , use="p", method = "s"))
+ 
+  # Difference between LM and original ggnet
+  meandif=c(meandif, t.test(abs(test$agedif_ggnet), abs(test$agedif_combinedage), paired = T)$estimate)
+  coefsMean=rbind(coefsMean,colMeans(coefs))
+
+  # RF statistics 
+  maeRF=c(maeRF, mean(abs(test[,paste0("agedif_combinedageRF")]), na.rm = T))
+  srRF=c(srRF, cor(test$age,test[,paste0("agedif_combinedageRF")], use="p", method = "s"))
+  meandifRF=c(meandifRF, t.test(abs(test$agedif_ggnet), abs(test$agedif_combinedageRF), paired = T)$estimate)
+  
+  # RF vs LM
+  meandifRFLM=c(meandifRFLM, t.test(abs(test$agedif_combinedageRF), abs(test$agedif_combinedage), paired = T)$estimate)
+  
+}
+return(cbind(mae,se_mae, sr, rr, rrank, coefsMean, pval,meandif, maeRF, srRF, meandifRF, meandifRFLM ))
+}
+
+# Mae of each ggnet model
+for (iii in 1:7){
+  print(iii)
+print(mean(abs(dat[,paste0("ggnet_iter", iii)]-dat$age), na.rm = T))
+print(sd(abs(dat[,paste0("ggnet_iter", iii)]-dat$age), na.rm = T)/sqrt(533))
+}
+
+# Mae of each ggnet epoch
+for (iii in 1:7){
+  print(iii)
+print(mean(abs(dat[,paste0("ggnet_epoch", iii)]-dat$age), na.rm = T))
+print(sd(abs(dat[,paste0("ggnet_epoch", iii)]-dat$age), na.rm = T)/sqrt(533))
+}
+
+###########################
+# Run score combinaison
+ggnet7iter=linearCombinationOfPredictors50_50split(iter = 0, scoreList = paste0("ggnet_iter", 1:7))
+ggnet7iter=as.data.frame(ggnet7iter)
+
+# Stats
+mean(ggnet7iter$mae)
+sqrt(mean((ggnet7iter$mae-mean(ggnet7iter$mae))**2))
+
+mean(ggnet7iter$maeRF)
+sqrt(mean((ggnet7iter$maeRF-mean(ggnet7iter$maeRF))**2))
+
+###########################
+# Run score combinaison - epochs
+ggnet7epoch=linearCombinationOfPredictors50_50split(iter = 0, scoreList = paste0("ggnet_epoch", 1:7))
+ggnet7epoch=as.data.frame(ggnet7epoch)
+
+# Stats
+mean(ggnet7epoch$mae)
+sqrt(mean((ggnet7epoch$mae-mean(ggnet7epoch$mae))**2))
+
+mean(ggnet7epoch$maeRF)
+sqrt(mean((ggnet7epoch$maeRF-mean(ggnet7epoch$maeRF))**2))
+
+#######################
+# 10 ggnets
+ggnet10iter=linearCombinationOfPredictors50_50split(iter = 0, scoreList = paste0("ggnet_iter", 1:10))
+ggnet10iter=as.data.frame(ggnet10iter)
+
+# Stats
+mean(ggnet10iter$mae)
+sqrt(mean((ggnet10iter$mae-mean(ggnet10iter$mae))**2))
+
+#######################
+# all models
+allmodels=linearCombinationOfPredictors50_50split(iter = 0, scoreList = c(paste0("ggnet_iter", 1:7), paste0("ggnet_epoch", 1:7), "ggnetage","resnetage",  "bbnetage", "obbnetage",  "svmage", "lmmmeanage", "lmmquantage" ) )
+allmodels=as.data.frame(allmodels)
+
+# Stats
+mean(allmodels$mae)
+sqrt(mean((allmodels$mae-mean(allmodels$mae))**2))
+
+boxplot(allmodels[,6:32], las=1, cex.axis=0.8)
+abline(h=0)
+grid()
+
+######################
+# with GM scores
+allmodels=linearCombinationOfPredictors50_50split( iter = 0, scoreList = c("ggnetage","resnetage",  "bbnetage", "obbnetage", "lmmmeanage_GM", "lmmquantage_GM", "svmage_GM") )
+allmodels=as.data.frame(allmodels)
+
+# Stats
+mean(allmodels$mae)
+sqrt(mean((allmodels$mae-mean(allmodels$mae))**2))
+
+
+
+```
+

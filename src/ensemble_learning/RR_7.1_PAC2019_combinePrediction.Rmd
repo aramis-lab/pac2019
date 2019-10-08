@@ -1,0 +1,654 @@
+---
+title: "PAC2019 combine models"
+author: "by [Baptiste Couvy-Duchesne] - `r format(Sys.time(), '%d %B %Y')`"
+output:
+  epuRate::PCTG:
+    toc: TRUE
+    code_folding: "show"
+---
+
+```{r, echo=FALSE, message=FALSE, warning=FALSE}
+# You need these libraries to run this template:
+library(rmarkdown)    # install.packages("rmarkdown") 
+library(epuRate)      # devtools::install_github("holtzy/epuRate", force=TRUE)
+```
+
+> Note that some of the folders may have been subsequently renamed 
+> For info 6LayerCNN corresponds to the 6-layer CNN
+> old6LayerCNN to the age specialised 6-layer CNN
+> InceptionV1 is refered to as Inception V1 in the manuscript
+
+
+# Open all prediction models and calculate performances
+
+
+```{R, message=FALSE, eval=FALSE}
+
+# Table of results
+nbIter=4
+res=as.data.frame(matrix(nrow = nbIter+1, ncol=51, data = NA))
+res$V1=c(0:nbIter)
+colnames(res)=c("Scenario", paste(rep(c("mae","maeSE", "sr","r", "rrank"), each=10), c("ggnet", "resnet", "bbnet", "obbnet","svm","lmmmean", "lmmquant", "lmmnobias","meancombined", "mediancombined"), sep = "_"))
+
+# Initialise plot
+png(paste0("../../results_main/Age_vsPredicted_pac2019_iter", "_AllAlgo.png"), width = 60, height = 35, units = "cm", res=400)
+par(mfrow=c(5,10), mar=c(4,4,2,1) )
+
+  for (iter in 0:nbIter){
+ 
+    dat=read.csv("../data/PAC2019_BrainAge_Training.csv", stringsAsFactors = F)
+
+  if (file.exists(paste0("../../results_main/InceptionV1/split-", iter, ".tsv"))){
+   # Open all prediction results
+  ggnet=read.table(paste0("../../results_main/InceptionV1/split-", iter, ".tsv"), header=T)
+  colnames(ggnet)=c("subject_ID", "age", "ggnetage")
+  dat=merge(dat, ggnet[,c("subject_ID", "ggnetage")], by="subject_ID", all.x=T )
+  } else { dat$ggnetage= NA }
+    
+  if (file.exists(paste0("../../results_main/ResNet/split-", iter, ".tsv"))){
+  resnet=read.table(paste0("../../results_main/ResNet/split-", iter, ".tsv"), header=T)
+  colnames(resnet)=c("subject_ID", "age", "resnetage")
+  dat=merge(dat, resnet[,c("subject_ID", "resnetage")], by="subject_ID", all.x=T )
+  }  else { dat$resnetage= NA }
+
+  if (file.exists(paste0("../../results_main/6LayerCNN/split-", iter, ".tsv"))){
+  bbnet=read.table(paste0("../../results_main/6LayerCNN/split-", iter, ".tsv"), header=T)
+  colnames(bbnet)=c("subject_ID", "age", "bbnetage")
+  dat=merge(dat, bbnet[,c("subject_ID", "bbnetage")], by="subject_ID", all.x=T )
+  }  else { dat$bbnetage= NA }
+  
+    if (file.exists(paste0("../../results_main/AgeSpe6LayerCNN/split-", iter, ".tsv"))){
+  obbnet=read.table(paste0("../../results_main/AgeSpe6LayerCNN/split-", iter, ".tsv"), header=T)
+  colnames(obbnet)=c("subject_ID", "age", "obbnetage")
+  dat=merge(dat, obbnet[,c("subject_ID", "obbnetage")], by="subject_ID", all.x=T )
+  }  else { dat$obbnetage= NA }
+    
+    
+  svm=read.table(paste0("../../results_main/SVM(rbf)/split-", iter, ".tsv"),sep="\t", header=T, fill=T, row.names = 1)
+  colnames(svm)[3]="svmage"
+  dat=merge(dat, svm[,c("subject_ID", "svmage")], by="subject_ID", all.x=T)
+  # Add site+gender predicted age for missing participants
+  m0=lm(age ~  factor(gender) + factor(site), dat=dat[which(is.na(dat$bbnetage)),]) 
+  dat$svmage[which(is.na(dat$svmage) & !is.na(dat$bbnetage))]=predict(m0, newdata = dat[which(is.na(dat$svmage) & !is.na(dat$bbnetage)),])
+  
+  lmmmean=read.table(paste0("../../results_main/BLUP_mean/split-", iter, ".tsv"), header=T)
+  colnames(lmmmean)[3]="lmmmeanage"
+  dat=merge(dat, lmmmean[,c("subject_ID", "lmmmeanage")], by="subject_ID", all.x=T)
+  
+  lmmquant=read.table(paste0("../../results_main/BLUP_quantiles/split-", iter, ".tsv"), header=T)
+  colnames(lmmquant)[3]="lmmquantage"
+  dat=merge(dat, lmmquant[,c("subject_ID", "lmmquantage")], by="subject_ID", all.x=T)
+  
+  lmmnobias=read.table(paste0("../../results_main/BLUP_mad/split-", iter, ".tsv"), header=T)
+  colnames(lmmnobias)[3]="lmmnobiasage"
+  dat=merge(dat, lmmnobias[,c("subject_ID", "lmmnobiasage")], by="subject_ID", all.x=T)
+  
+  # Add mean, median combined
+  dat$meancombinedage=rowMeans(x = dat[,paste0(c("ggnet", "resnet", "bbnet", "obbnet", "svm","lmmmean","lmmquant"), "age")], na.rm = T)
+  library(matrixStats)
+  dat$mediancombinedage=apply( dat[,paste0(c("ggnet", "resnet", "bbnet", "obbnet", "svm","lmmmean","lmmquant"), "age")], 1,  function(x) median(x,na.rm = T) )
+  mae=maeSE=sr=rr=rrank=NA
+  for (scenario in c("ggnet", "resnet", "bbnet", "obbnet", "svm","lmmmean", "lmmquant", "lmmnobias", "meancombined", "mediancombined")){
+    
+    dat[,paste0("agedif_", scenario)]=dat$age-dat[,paste0(scenario, "age")]  
+    mae=mean(abs(dat[,paste0("agedif_", scenario)]), na.rm = T)
+    maeSE=sd(abs(dat[,paste0("agedif_", scenario)]), na.rm = T)/sqrt(length(which(!is.na(dat[,paste0("agedif_", scenario)]))))
+
+    sr=cor(dat$age,dat[,paste0("agedif_", scenario)], use="p", method = "s")
+    rr=cor(dat$age,dat[,paste0(scenario, "age")] , use="p", method = "p")
+    rrank=cor(dat$age,dat[,paste0(scenario, "age")] , use="p", method = "s")
+    
+    res[which(res$Scenario==iter),paste(c("mae","maeSE", "sr","r", "rrank"), scenario, sep = "_")]=c(mae,maeSE,sr, rr, rrank)
+    
+    if(length(which(!is.na(dat[,paste0(scenario, "age")]))>0)){
+plot(dat$age, dat[,paste0(scenario, "age")], xlab="Age", ylab=paste0("predicted Age ", scenario), main=paste0( "mae=" , signif(mae, 3), " , rankbias=",signif(sr, 3), ", r=", signif(rr, 3)), cex.main=1)
+abline(a=0,b=1, lwd=2)
+} else{ plot(1,1) }
+
+   
+}
+   write.table(dat, paste0("../../results_main/Dat_iter_", iter, ".tsv"), col.names = T, row.names = F, quote=F, sep="\t")
+    
+  }
+dev.off()
+
+ # Write results
+write.table(res, paste0("../../results_main/performances_AllAlgo.txt") , row.names = F, quote=F, sep="\t")
+
+# Get values for Table
+res[,grep(pattern = "mae_", x = colnames(res))]
+res[,grep(pattern = "maeSE_", x = colnames(res))]
+res[,grep(pattern = "sr_", x = colnames(res))]
+
+cor(dat$agedif_bbnet, dat$age)
+plot(dat$agedif_bbnet, dat$age)
+
+plot(dat$age, dat$agedif_bbnet)
+abline(lm(dat$agedif_bbnet ~ dat$age))
+
+
+cor(dat$age, abs(dat$agedif_bbnet))
+
+
+plot(dat$age, abs(dat$agedif_bbnet))
+abline(lm(abs(dat$agedif_bbnet) ~ dat$age))
+
+library(lme4)
+dat=read.table("../../results_main/Dat_iter_0_enhanced.tsv", header=T, stringsAsFactors = F)
+
+for (scenario in c("bbnet", "obbnet", "lmmmean", "lmmquant", "ggnet", "resnet", "svm")){
+dat$abs_agedif=abs(dat[,paste0("agedif_", scenario)])
+m1=lmer("abs_agedif ~ age + (1|gender) + (1|site)", data = dat, REML=F)
+m2=lmer("abs_agedif ~ age + (1|site)", data = dat, REML=F)
+m3=lmer("abs_agedif ~ age + (1|gender)", data = dat, REML=F)
+m4=lmer("abs_agedif ~ (1|gender) + (1|site)", data = dat, REML=F)
+
+print(scenario)
+print(anova(m1,m2))
+print(anova(m1,m3))
+print(anova(m1,m4))
+}
+
+
+t.test(dat$abs_agedif_bbnet[which(dat$gender=="f")], dat$abs_agedif_bbnet[which(dat$gender=="m")])
+
+
+```
+
+
+# Produce plots
+
+```{R, message=FALSE, eval=FALSE}
+
+colSums(is.na(dat))
+cols=viridis::viridis(n = 7, option = "C")
+
+png("../../results_main/MAE.png", width = 20, height = 12, units = "cm", res = 400)
+par(mar=c(4,4,1,7))
+plot(res$Scenario, res$mae_ggnet, col=cols[1], pch=20, cex=2 ,ylim=c(3,6), ylab="MAE")
+points(res$Scenario, res$mae_resnet, col=cols[2], pch=20, cex=2 )
+points(res$Scenario, res$mae_bbnet, col=cols[3], pch=20, cex=2 )
+points(res$Scenario, res$mae_svm, col=cols[4], pch=20, cex=2 )
+points(res$Scenario, res$mae_lmmmean, col=cols[5], pch=20,cex=2)
+points(res$Scenario, res$mae_lmmquant, col=cols[6], pch=20, cex=2 )
+#points(res$Scenario, res$mae_lmmnobias, col=cols[7], pch=20, cex=2 )
+points(res$Scenario, res$mae_obbnet, col=cols[7], pch=20, cex=2 )
+
+points(res$Scenario, res$mae_meancombined, col="grey", pch=0, cex=2 )
+points(res$Scenario, res$mae_mediancombined, col="grey", pch=6, cex=2 )
+
+legend(x = 4.2, y = 5, legend =c("ggnet", "resnet", "bbnet", "svm","lmmmean", "lmmquant",  "obbnet", "mean", "median"), col = c(cols, "grey", "grey"),pch=c(rep(20,7), 0,6),pt.cex = 2,  xpd=T)
+dev.off()
+
+
+```
+
+
+# Use mean by site, median and quantile approach on deep learning methods
+
+```{R, message=FALSE, eval=FALSE}
+
+res=read.table("../../results_main/performances_AllAlgo.txt", header = T, stringsAsFactors = F)
+
+for (iter in 0:4){
+
+dat=read.table(paste0("../../results_main/Dat_iter_", iter, ".tsv"), header=T, stringsAsFactors = F)
+
+dat$trainData=ifelse(is.na(dat$bbnetage), 1, 0)
+
+ for (scenario in c("ggnet", "resnet", "bbnet", "svm","lmmmean", "lmmquant", "lmmnobias", "obbnet")){
+
+   # Mean per site  
+   for (site in 0:16){
+     dat[which(dat$trainData==0 & dat$site==site),paste0(scenario, "age_meansite")]=scale(dat[which(dat$trainData==0 & dat$site==site),paste0(scenario, "age")])*sd(dat$age[which(dat$trainData==1 & dat$site==site)])+mean(dat$age[which(dat$trainData==1 & dat$site==site)])
+  }
+ 
+dat[,paste0("agedif_", scenario, "_meansite")]=dat$age-dat[,paste0(scenario, "age_meansite")]
+res[which(res$Scenario==iter),paste0("mae_",scenario, "_meansite")]= mean(abs(dat[,paste0("agedif_", scenario, "_meansite")]), na.rm = T) 
+res[which(res$Scenario==iter),paste0("maeSE_",scenario, "_meansite")]= sd(abs(dat[,paste0("agedif_", scenario, "_meansite")]), na.rm = T)/sqrt(length(which(!is.na(abs(dat[,paste0("agedif_", scenario, "_meansite")]))))) 
+res[which(res$Scenario==iter),paste0("r_",scenario, "_meansite")]= cor(dat[,paste0(scenario, "age_meansite")], dat$age, use="p", method="p")
+res[which(res$Scenario==iter),paste0("rrank_",scenario, "_meansite")]= cor(dat[,paste0(scenario, "age_meansite")], dat$age, use="p", method="s")
+res[which(res$Scenario==iter),paste0("sr_",scenario, "_meansite")]= cor(dat[,paste0("agedif_",scenario, "_meansite")], dat$age, use="p", method="s")
+
+
+   # Median per site  
+   for (site in 0:16){
+     dat[which(dat$trainData==0 & dat$site==site),paste0(scenario, "age_mediansite")]=scale(dat[which(dat$trainData==0 & dat$site==site),paste0(scenario, "age")])*mad(dat$age[which(dat$trainData==1 & dat$site==site)])+median(dat$age[which(dat$trainData==1 & dat$site==site)])
+  }
+ 
+dat[,paste0("agedif_", scenario, "_mediansite")]=dat$age-dat[,paste0(scenario, "age_mediansite")]
+res[which(res$Scenario==iter),paste0("mae_",scenario, "_mediansite")]= mean(abs(dat[,paste0("agedif_", scenario, "_mediansite")]), na.rm = T) 
+res[which(res$Scenario==iter),paste0("maeSE_",scenario, "_mediansite")]= sd(abs(dat[,paste0("agedif_", scenario, "_mediansite")]), na.rm = T)/sqrt(length(which(!is.na(abs(dat[,paste0("agedif_", scenario, "_mediansite")]))))) 
+res[which(res$Scenario==iter),paste0("r_",scenario, "_mediansite")]= cor(dat[,paste0(scenario, "age_mediansite")], dat$age, use="p", method="p")
+res[which(res$Scenario==iter),paste0("rrank_",scenario, "_mediansite")]= cor(dat[,paste0(scenario, "age_mediansite")], dat$age, use="p", method="s")
+res[which(res$Scenario==iter),paste0("sr_",scenario, "_mediansite")]= cor(dat[,paste0("agedif_",scenario, "_mediansite")], dat$age, use="p", method="s")
+   
+    # Quantile alignment 
+if(length(which(!is.na(dat[which(dat$trainData==0 ),paste0(scenario, "age")]))>0)){
+  for (ind in 1:length(dat[which(dat$trainData==0 ),paste0(scenario, "age")])){
+  dat[which(dat$trainData==0 ),paste0(scenario, "age_pct")][ind]=ecdf(dat[which(dat$trainData==0 ),paste0(scenario, "age")])(dat[which(dat$trainData==0),paste0(scenario, "age")][ind])
+  dat[which(dat$trainData==0 ),paste0(scenario, "age_quantile")][ind]=quantile(x = dat$age[which(dat$trainData==1 )], probs =  dat[which(dat$trainData==0 ),paste0(scenario, "age_pct")][ind])
+
+  }
+ 
+dat[,paste0("agedif_", scenario, "_quantile")]=dat$age-dat[,paste0(scenario, "age_quantile")]
+res[which(res$Scenario==iter),paste0("mae_",scenario, "_quantile")]= mean(abs(dat[,paste0("agedif_", scenario, "_quantile")]), na.rm = T) 
+res[which(res$Scenario==iter),paste0("maeSE_",scenario, "_quantile")]= sd(abs(dat[,paste0("agedif_", scenario, "_quantile")]), na.rm = T)/sqrt(length(which(!is.na(abs(dat[,paste0("agedif_", scenario, "_quantile")]))))) 
+res[which(res$Scenario==iter),paste0("r_",scenario, "_quantile")]= cor(dat[,paste0(scenario, "age_quantile")], dat$age, use="p", method="p")
+res[which(res$Scenario==iter),paste0("rrank_",scenario, "_quantile")]= cor(dat[,paste0(scenario, "age_quantile")], dat$age, use="p", method="s")
+res[which(res$Scenario==iter),paste0("sr_",scenario, "_quantile")]= cor(dat[,paste0("agedif_",scenario, "_quantile")], dat$age, use="p", method="s")
+}  
+    
+ }
+write.table(dat,paste0("../../results_main/Dat_iter_", iter, "_enhanced.tsv"), col.names=T, row.names=F, quote=F)
+
+# Combined scores
+ dat$meancombinedage_mediansite=rowMeans(x = dat[,paste0(c("ggnet", "resnet", "bbnet", "svm","lmmmean"), "age_mediansite")], na.rm = T)
+  library(matrixStats)
+  dat$mediancombinedage_mediansite=apply( dat[,paste0(c("ggnet", "resnet", "bbnet", "svm","lmmmean"), "age_mediansite")], 1,  function(x) median(x,na.rm = T) )
+
+ # Get statistics
+dat[,paste0("agedif_", "meancombined", "_mediansite")]=dat$age-dat[,paste0("meancombined", "age_mediansite")]
+res[which(res$Scenario==iter),paste0("mae_","meancombined", "_mediansite")]= mean(abs(dat[,paste0("agedif_", "meancombined", "_mediansite")]), na.rm = T)
+res[which(res$Scenario==iter),paste0("maeSE_","meancombined", "_mediansite")]= sd(abs(dat[,paste0("agedif_", "meancombined", "_mediansite")]), na.rm = T)/sqrt(length(which(!is.na(dat[,paste0("agedif_", "meancombined", "_mediansite")]))) )
+res[which(res$Scenario==iter),paste0("r_","meancombined", "_mediansite")]= cor(dat[,paste0("meancombined", "age_mediansite")], dat$age, use="p", method="p")
+res[which(res$Scenario==iter),paste0("rrank_","meancombined", "_mediansite")]= cor(dat[,paste0("meancombined", "age_mediansite")], dat$age, use="p", method="s")
+res[which(res$Scenario==iter),paste0("sr_","meancombined", "_mediansite")]= cor(dat[,paste0("agedif_","meancombined", "_mediansite")], dat$age, use="p", method="s")
+ 
+dat[,paste0("agedif_", "mediancombined", "_mediansite")]=dat$age-dat[,paste0("mediancombined", "age_mediansite")]
+res[which(res$Scenario==iter),paste0("mae_","mediancombined", "_mediansite")]= mean(abs(dat[,paste0("agedif_", "mediancombined", "_mediansite")]), na.rm = T) 
+res[which(res$Scenario==iter),paste0("maeSE_","mediancombined", "_mediansite")]= sd(abs(dat[,paste0("agedif_", "mediancombined", "_mediansite")]), na.rm = T)/sqrt(length(which(!is.na(dat[,paste0("agedif_", "mediancombined", "_mediansite")]))))
+res[which(res$Scenario==iter),paste0("r_","mediancombined", "_mediansite")]= cor(dat[,paste0("mediancombined", "age_mediansite")], dat$age, use="p", method="p")
+res[which(res$Scenario==iter),paste0("rrank_","mediancombined", "_mediansite")]= cor(dat[,paste0("mediancombined", "age_mediansite")], dat$age, use="p", method="s")
+res[which(res$Scenario==iter),paste0("sr_","mediancombined", "_mediansite")]= cor(dat[,paste0("agedif_","mediancombined", "_mediansite")], dat$age, use="p", method="s")
+ 
+  
+}
+
+write.table(res,"../../results_main/performances_AllAlgo_enhanced.txt", col.names=T, row.names=F, quote=F)
+
+colSums(is.na(dat))
+
+# Show statistics for table
+ for (scenario in c("lmmmean", "lmmquant","svm", "bbnet", "obbnet"  , "resnet", "ggnet")){
+print(scenario)
+print(res[which(res$Scenario==0),paste0("mae_", scenario, "_mediansite")])   
+print(res[which(res$Scenario==0),paste0("maeSE_", scenario, "_mediansite")])   
+print(res[which(res$Scenario==0),paste0("sr_", scenario, "_mediansite")])   
+ }
+
+res$mae_ggnet_mediansite
+res$maeSE_ggnet_mediansite
+
+res$mae_ggnet
+res$maeSE_ggnet
+
+hist(abs(dat[,paste0("agedif_", scenario, "_mediansite")]), breaks=20)
+hist(abs(dat[,paste0("agedif_", scenario)]), breaks=20)
+
+plot(abs(dat[,paste0("agedif_", scenario, "_mediansite")]), abs(dat[,paste0("agedif_", scenario)]))
+abline(a=0, b=1)
+
+plot(dat[,paste0("agedif_", scenario, "_mediansite")], dat[,paste0("agedif_", scenario)])
+boxplot(list(abs(dat[,paste0("agedif_", scenario, "_mediansite")]), abs(dat[,paste0("agedif_", scenario)])))
+```
+
+# Plot effects of transformation of performance
+
+```{R, message=FALSE, eval=FALSE}
+
+res=read.table("../../results_main/performances_AllAlgo_enhanced.txt", header=T)
+
+cols=viridis::viridis(n = 7, option = "C")
+
+ylimmae=c(3,7)
+ylimr=c(0.8,1)
+ylimrrank=c(0.7,1)
+ylimsr=c(-0.2,1)
+
+jjj=1
+for (scenario in c("ggnet", "resnet", "bbnet", "svm","lmmmean", "lmmquant", "lmmnobias") ){
+  
+png(paste0("../../results_main/OriginalVs_enhanced_", scenario, ".png"), width = 60, height = 12, units = "cm", res = 400)
+par(mar=c(4,4,1,1), mfrow=c(1,4))
+
+ for (moda in c("mae", "r", "rrank", "sr")){
+  
+  if(moda=="sr"){par(mar=c(4,4,1,7))}
+  
+plot(res$Scenario, res[,paste0(moda,"_",scenario)], col=cols[jjj], pch=21, cex=1.5 ,ylim = get(paste0("ylim", moda)), ylab=moda)
+points(res$Scenario, res[,paste0(moda,"_",scenario, "_meansite")], col=cols[jjj], pch=15, cex=1.5 )
+points(res$Scenario, res[,paste0(moda,"_",scenario, "_mediansite")], col=cols[jjj], pch=17, cex=1.5 )
+points(res$Scenario, res[,paste0(moda,"_",scenario, "_quantile")], col=cols[jjj], pch=18, cex=1.5 )
+
+if(moda=="sr"){
+  abline(h=c(-0.1,0.1))
+  legend(x = 4.2, y = mean(get(paste0("ylim", moda))), legend =c(paste(scenario, c("", "mean site", "median site", "quantiles"))), col = cols[jjj],pch=c(21,15,17,18),pt.cex = 2, cex =0.8,  xpd=T)
+}
+
+ }
+jjj=jjj+1
+dev.off()
+}
+
+```
+
+
+
+# Linear model to combine scores
+
+```{R, message=FALSE, eval=FALSE}
+
+linearCombinationOfPredictors=function(iter, scoreList){
+dat=read.table(paste0("../../results_main/Dat_iter_", iter, ".tsv"), header=T, stringsAsFactors = F)
+res=read.table("../../results_main/performances_AllAlgo.txt", header = T, stringsAsFactors = F)
+
+if( length(which(colSums(!is.na(dat))==0))>0){
+dat=dat[,-which(colSums(!is.na(dat))==0)]
+}
+
+mae=sr=rr=rrank=NULL
+nsiter=500
+
+ nsplit=floor(length(which(!is.na(dat$meancombinedage)))/2)
+for (siter in 1:nsiter){
+ 
+  trainID=sample(x = dat[which(!is.na(dat$meancombinedage)),"subject_ID"], size = nsplit, replace = F)
+  train=dat[which(dat$subject_ID %in% trainID),]
+  test=dat[which(!dat$subject_ID %in% trainID & !is.na(dat$meancombinedage)),]
+
+  predages=colnames(test)[which(colnames(test) %in% scoreList )]
+  m1=lm(as.formula(paste("age ~ ", paste(predages , collapse="+"))), data=train)
+  test$combinedage=predict(m1, newdata = test)
+  summary(m1)
+  
+   
+    test[,paste0("agedif_", siter)]=test$age-test[,"combinedage"]  
+    mae=c(mae, mean(abs(test[,paste0("agedif_", siter)]), na.rm = T))
+    sr=c(sr, cor(test$age,test[,paste0("agedif_", siter)], use="p", method = "s"))
+    rr=c(rr, cor(test$age,test[,"combinedage"] , use="p", method = "p"))
+    rrank=c(rrank, cor(test$age,test[,"combinedage"] , use="p", method = "s"))
+  
+}
+ #print(median(mae), median(sr), median(rr), median(rrank))
+return(cbind(mae, sr, rr, rrank))
+}
+
+
+########################
+# New function with 50fold CV - bootstrap
+library(caret)
+linearCombinationOfPredictors5FoldCV=function(iter, scoreList){
+mae=se_mae=sr=rr=rrank=coefsMean=NULL
+dat=read.table(paste0("../../results_main/Dat_iter_", iter, "_enhanced.tsv"), header=T, stringsAsFactors = F)
+
+for (nCV in 1:50){
+  coefs=NULL
+  
+# define training control
+dataa=dat[which(!is.na(dat$meancombinedage)),]
+if( length(which(colSums(!is.na(dataa))==0))>0){
+dataa=dataa[,-which(colSums(!is.na(dataa))==0)]
+}
+
+flds <- createFolds(dataa$subject_ID, k = 5, list = TRUE, returnTrain = FALSE)
+dataa$combinedage=NA
+for (nfold in 1:5){
+  
+  train=dataa[-flds[[nfold]],]
+  predages=colnames(dataa)[which(colnames(dataa) %in% scoreList )]
+  m1=lm(as.formula(paste("age ~ 0 + ", paste(predages , collapse="+"))), data=train, na.action = "na.omit")
+  dataa$combinedage[flds[[nfold]]]=predict(m1, newdata = dataa[flds[[nfold]],])
+  coefs=rbind(coefs, summary(m1)$coeff[,1])
+  if (iter ==0){
+  write.table(dataa, paste0("../../results_main/iter0_LM_siter", nfold, ".txt"), col.names = T, row.names = F, quote=F) }
+}
+
+dataa[,paste0("agedif_combinedage")]=dataa$age-dataa[,"combinedage"]  
+mae=c(mae, mean(abs(dataa[,paste0("agedif_combinedage")]), na.rm = T))
+se_mae=sd(abs(dataa[,paste0("agedif_combinedage")]), na.rm = T)/sqrt(length(dataa$agedif_combinedage))
+sr=c(sr, cor(dataa$age,dataa[,paste0("agedif_combinedage")], use="p", method = "s"))
+rr=c(rr, cor(dataa$age,dataa[,"combinedage"] , use="p", method = "p"))
+rrank=c(rrank, cor(dataa$age,dataa[,"combinedage"] , use="p", method = "s"))
+coefsMean=rbind(coefsMean,colMeans(coefs))
+}
+return(cbind(mae,se_mae, sr, rr, rrank, coefsMean ))
+}
+
+###################
+# To allow difference testing, we perform a 50:50 split over 500 bootstrap samples to estimate MAE and its SE on the
+
+linearCombinationOfPredictors50_50split=function(iter, scoreList){
+
+mae=se_mae=sr=rr=rrank=coefsMean=meandif=pval=NULL
+dat=read.table(paste0("../../results_main/Dat_iter_", iter, "_enhanced.tsv"), header=T, stringsAsFactors = F)
+
+# extract ~N=530 test set
+dataa=dat[which(!is.na(dat$meancombinedage)),]
+if( length(which(colSums(!is.na(dataa))==0))>0){
+dataa=dataa[,-which(colSums(!is.na(dataa))==0)]
+}
+
+# Bootstrap repeats
+for (nCV in 1:500){
+  coefs=NULL
+
+# Get nested training and test sample
+  nestedTrain=sample(dataa$subject_ID, size = floor(length(dataa$subject_ID)*0.5), replace = F )
+
+  train=dataa[which(dataa$subject_ID %in% nestedTrain),]
+  predages=colnames(dataa)[which(colnames(dataa) %in% scoreList )]
+  m1=lm(as.formula(paste("age ~ 0 + ", paste(predages , collapse="+"))), data=train, na.action = "na.omit")
+  
+  test=dataa[-which(dataa$subject_ID %in% nestedTrain),]
+  test$combinedage=predict(m1, newdata = test)
+  coefs=rbind(coefs, summary(m1)$coeff[,1])
+  test[,paste0("agedif_combinedage")]=test$age-test[,"combinedage"]  
+  
+  mae=c(mae, mean(abs(test[,paste0("agedif_combinedage")]), na.rm = T))
+  se_mae=sd(abs(test[,paste0("agedif_combinedage")]), na.rm = T)/sqrt(length(test$agedif_combinedage))
+  sr=c(sr, cor(test$age,test[,paste0("agedif_combinedage")], use="p", method = "s"))
+  rr=c(rr, cor(test$age,test[,"combinedage"] , use="p", method = "p"))
+  rrank=c(rrank, cor(test$age,test[,"combinedage"] , use="p", method = "s"))
+  pval=c(pval, t.test(abs(test$agedif_ggnet), abs(test$agedif_combinedage), paired = T)$p.value)
+  meandif=c(meandif, t.test(abs(test$agedif_ggnet_mediansite), abs(test$agedif_combinedage), paired = T)$estimate)
+  coefsMean=rbind(coefsMean,colMeans(coefs))
+}
+return(cbind(mae,se_mae, sr, rr, rrank, coefsMean, pval,meandif ))
+}
+
+
+```
+
+# Results for fold 0
+
+```{R, message=FALSE, eval=FALSE}
+
+iter=0
+
+dat=read.table(paste0("../../results_main/Dat_iter_", iter, ".tsv"), header=T, stringsAsFactors = F)
+png("../results_main/Plot_allScores.png", width = 20, height = 18, units = "cm", res = 400)
+plot(dat[,c("ggnetage","resnetage",  "bbnetage", "obbnetage",  "svmage", "lmmmeanage", "lmmquantage")])
+dev.off()
+
+
+# Weights
+wgt=linearCombinationOfPredictors5FoldCV(iter = 0, scoreList =c("ggnetage","resnetage",  "bbnetage", "obbnetage",  "svmage", "lmmmeanage", "lmmquantage") )
+wgt=as.data.frame(wgt)
+# SE from mae bootstrap
+sebts=sqrt(1/50*sum((wgt$mae-mean(wgt$mae))**2))
+sqrt(mean((wgt$mae-mean(wgt$mae))**2))
+mean(wgt$mae)
+median(wgt$sr)
+
+png("../../results_main/BoxPlots_weights_iter0_wsvml.png", width = 15, height = 8, units = "cm", res = 300)
+par(mar=c(3,3,1,1))
+boxplot(wgt[,6:12], las=1, cex.axis=0.5)
+grid()
+dev.off()
+
+cor(dat[,c("ggnetage","resnetage",  "bbnetage", "obbnetage",  "svmage", "lmmmeanage", "lmmquantage")], use="p")
+
+# Correlation 0.999 -> estimates more unstable
+wgt=linearCombinationOfPredictors5FoldCV(iter = 0, scoreList =c("ggnetage","resnetage",  "bbnetage", "obbnetage",  "svmage", "lmmmeanage", "lmmquantage", "mediancombinedage") )
+
+png("../results_main/BoxPlots_weights_iter0.png", width = 15, height = 8, units = "cm", res = 300)
+par(mar=c(3,3,1,1))
+boxplot(wgt[,5:12], las=1, cex.axis=0.5)
+grid()
+dev.off()
+
+
+# Using 50:50 split design for testing
+wgt50=linearCombinationOfPredictors50_50split(iter = 0, scoreList =c("ggnetage","resnetage",  "bbnetage", "obbnetage",  "svmage", "lmmmeanage", "lmmquantage") )
+wgt50=as.data.frame(wgt50)
+# SE from mae bootstrap
+sqrt(mean((wgt50$mae-mean(wgt50$mae))**2))
+mean(wgt50$mae)
+mean(wgt50$sr)
+# Improvement from ggnet/inception
+mean(wgt50$meandif)
+sqrt(mean((wgt50$meandif-mean(wgt50$meandif))**2))
+1-pt(q =mean(wgt50$meandif) / (sqrt(mean((wgt50$meandif-mean(wgt50$meandif))**2)) ) , df = 533/2  )
+1-pchisq(q =(mean(wgt50$meandif) / (sqrt(mean((wgt50$meandif-mean(wgt50$meandif))**2)) ))**2 , df = 1 )
+
+
+
+# 50:50 split design on median by site scores
+wgt50=linearCombinationOfPredictors50_50split(iter = 0, scoreList =paste0(c("ggnet", "resnet", "bbnet", "svm","lmmmean", "lmmquant", "obbnet"), "age_mediansite") )
+wgt50=as.data.frame(wgt50)
+# SE from mae bootstrap
+sqrt(mean((wgt50$mae-mean(wgt50$mae))**2))
+mean(wgt50$mae)
+mean(wgt50$sr)
+mean(wgt50$meandif)
+sqrt(mean((wgt50$meandif-mean(wgt50$meandif))**2))
+1-pt(q =mean(wgt50$meandif) / (sqrt(mean((wgt50$meandif-mean(wgt50$meandif))**2)) ) , df = 533/2  )
+
+```
+
+# Plots of weighted predictor of scores
+
+# All results - all performances indicators
+
+```{R, message=FALSE, eval=FALSE}
+
+
+library(scales)
+res=read.table("../../results_main/performances_AllAlgo_enhanced.txt", header=T)
+res2=read.table("../../results_main/performances_AllAlgo_MA.txt", header=T, sep="\t")
+res=cbind(res, res2[,grep(colnames(res2), pattern = "rf")])
+
+meanLM=rrankLM=rrLM=rsLM=NULL
+for (iter in 0:4){
+resWeighted=linearCombinationOfPredictors5FoldCV(iter = iter, scoreList = paste0(c("ggnet", "resnet", "bbnet", "svm","lmmmean", "lmmquant", "obbnet"), "age") )
+meanLM=c(meanLM, mean(resWeighted[,"mae"]) )
+rrLM=c(rrLM, mean(resWeighted[,"rr"]) )
+rsLM=c(rsLM, mean(resWeighted[,"sr"]) )
+rrankLM=c(rrankLM, mean(resWeighted[,"rrank"]) )
+write.table(resWeighted, paste0("../../results_main/summaryLM_scoreCombine_iter", iter, ".tsv"), sep="\t", col.names = T, row.names = F )
+}
+
+res$mae_LMweight=meanLM
+res$r_LMweight=rrLM
+res$sr_LMweight=rsLM
+res$rrank_LMweight=rrankLM
+
+
+sd(resWeighted[,1])/sqrt(50)
+colnames(res)
+
+
+################################################################
+# Plot all results
+
+
+ylimmae=c(3,6)
+ylimr=c(0.85,1)
+ylimrrank=c(0.8,1)
+ylimsr=c(-0.2,1)
+pchvect=c(rep(20, 7), 15, 17, 18)
+
+cols=viridis::viridis(n = 7, option = "C")
+cols=c(cols,"grey", "grey")
+
+png(paste0("../../results_main/OriginalScores_performance_0intercept.png"), width = 40, height = 12, units = "cm", res = 400)
+par(mar=c(4,4,1,1), mfrow=c(1,4))
+
+ # Loop on performances to create the different panels
+ for (moda in c("mae", "r", "rrank", "sr")){
+   if(moda=="sr"){par(mar=c(4,4,1,7))}
+   plot(res$Scenario, res[,paste0(moda,"_","ggnet")], col=cols[1], pch=20, cex=1.5 ,ylim = get(paste0("ylim", moda)), ylab=moda)
+  jjj=2
+   for (scenario in c("resnet", "bbnet", "svm","lmmmean", "lmmquant", "obbnet", "mediancombined", "meancombined") ){
+    points(res$Scenario, res[,paste0(moda,"_",scenario)], col=cols[jjj], pch=pchvect[jjj], cex=1.5 )
+    jjj=jjj+1
+    grid()
+  
+   }
+
+# Random forest
+points(res$Scenario, res[,paste0(moda,"_rfcombined")], col="black", pch=8, cex=1.5 )
+points(res$Scenario, res[,paste0(moda,"_rfcombinedbonus")], col="black", pch=10, cex=1.5 )
+
+points(res$Scenario, res[,paste0(moda,"_LMweight")], col="black", pch=18, cex=1.5 )
+
+#points(res$Scenario, res$mae_rfcombinedbonus, col="black", pch=10, cex=1.5 )
+#points(res$Scenario, res$mae_LMweight, col="black", pch=18, cex=1.5 )
+ 
+
+# add legend to last panel  
+if(moda=="sr"){
+  abline(h=c(-0.1,0.1))
+  legend(x = 4.2, y = mean(get(paste0("ylim", moda))), legend =c("ggnet","resnet", "bbnet", "svm","lmmmean", "lmmquant", "obbnet", "mediancombined", "meancombined", "LM weighted", "RF weighted", "RF weigthed bonus"), col = c(cols, "black","black", "black") ,pch=c(pchvect,8,10) ,pt.cex = 2, cex =0.8,  xpd=T) }
+ }
+
+dev.off()
+
+
+```
+
+## Median per site - scores (challenge 2)
+
+```{R, message=FALSE, eval=FALSE}
+
+# Ensemble learning from scores normalised by median site (challenge 2)
+wgt=linearCombinationOfPredictors5FoldCV(iter = 0, scoreList =paste0(c("ggnet", "resnet", "bbnet", "svm","lmmmean", "lmmquant", "obbnet"), "age_mediansite") )
+wgt=as.data.frame(wgt)
+# SE from mae bootstrap
+sebts=sqrt(1/50*sum((wgt$mae-mean(wgt$mae))**2))
+sqrt(mean((wgt$mae-mean(wgt$mae))**2))
+mean(wgt$mae)
+mean(wgt$sr)
+
+quantile(wgt$mae,probs = 0.025)
+quantile(wgt$mae,probs = 0.0975)
+(4.6365-4.6055)*1.96
+
+wgt[which(wgt$mae==median(wgt$mae)),]
+
+```
+
+
+## Demographics per split
+
+```{R, message=FALSE, eval=FALSE}
+
+for (iter in 0:4){
+  
+  dat=read.table(paste0("../../results_main/Dat_iter_", iter, ".tsv"), header=T)
+  print(iter)
+  print(mean(dat$age[which(!is.na(dat$ggnetage))]))
+  print(sd(dat$age[which(!is.na(dat$ggnetage))]))
+  print(prop.table(table(dat$gender[which(!is.na(dat$ggnetage))])))
+  
+}
+
+
+mean(dat$age)
+sd(dat$age)
+prop.table(table(dat$gender))
+
+```
+
+
